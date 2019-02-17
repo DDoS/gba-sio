@@ -10,7 +10,7 @@ void setup() {
     NVIC_EnableIRQ(TC0_IRQn);
     NVIC_EnableIRQ(PIOD_IRQn);
 
-    Serial.begin(250000);
+    Serial.begin(38400);
 
     pinMode(pinSC, INPUT_PULLUP);
     pinMode(pinSI, INPUT_PULLUP);
@@ -20,8 +20,13 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(pinSI), startWrite, FALLING);
 }
 
+volatile unsigned int dataMaster = 0xFFFF;
+volatile unsigned int dataChildIn = 0xFFFF;
+volatile unsigned int dataChildOut = 0xFFFF;
+volatile bool newData = false;
+
 unsigned int dataIn = 0;
-unsigned int dataOut = 0xB9A0;
+unsigned int dataOut = 0;
 
 unsigned int bitCount = 0;
 
@@ -65,11 +70,14 @@ void TC0_Handler() {
             attachInterrupt(digitalPinToInterrupt(pinSD), startRead, FALLING);
 
             stopTimerBaud3();
+
+            dataMaster = dataIn;
+            dataChildOut = dataOut;
+            newData = true;
+
             // Clear port D interrupt status
             (void)REG_PIOD_ISR;
             NVIC_EnableIRQ(PIOD_IRQn);
-
-            Serial.println(dataIn, HEX);
         }
     } else {
         if (bitCount >= 16) {
@@ -97,6 +105,8 @@ void startRead() {
 
 void startWrite() {
     if (!digitalRead(pinSC)) {
+        dataOut = dataChildIn;
+        dataChildIn = 0xFFFF;
         bitCount = 0;
         writing = true;
         NVIC_DisableIRQ(PIOD_IRQn);
@@ -105,4 +115,23 @@ void startWrite() {
 }
 
 void loop() {
+    if (Serial.available() >= 2) {
+        unsigned int data = Serial.read() & 0xFF;
+        data |= (Serial.read() & 0xFF) << 8;
+
+        dataChildIn = data;
+    }
+
+    if (newData) {
+        NVIC_DisableIRQ(PIOD_IRQn);
+        newData = false;
+        constexpr int bufferSize = 4;
+        byte buffer[bufferSize] = {
+            (byte)dataMaster, (byte)(dataMaster >> 8),
+            (byte)dataChildOut, (byte)(dataChildOut >> 8)
+        };
+        Serial.write(buffer, bufferSize);
+        //Serial.print(dataMaster, HEX); Serial.print(' '); Serial.println(dataChildOut, HEX);
+        NVIC_EnableIRQ(PIOD_IRQn);
+    }
 }
