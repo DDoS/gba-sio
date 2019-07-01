@@ -10,7 +10,8 @@ void setup() {
     NVIC_EnableIRQ(TC0_IRQn);
     NVIC_EnableIRQ(PIOD_IRQn);
 
-    Serial.begin(38400);
+    SerialUSB.begin(38400);
+    while(!SerialUSB);
 
     pinMode(pinSC, INPUT_PULLUP);
     pinMode(pinSI, INPUT_PULLUP);
@@ -20,10 +21,7 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(pinSI), startWrite, FALLING);
 }
 
-volatile unsigned int dataMaster = 0xFFFF;
-volatile unsigned int dataChildIn = 0xFFFF;
-volatile unsigned int dataChildOut = 0xFFFF;
-volatile bool newData = false;
+volatile unsigned int dataChild = 0xFFFF;
 
 unsigned int dataIn = 0;
 unsigned int dataOut = 0;
@@ -70,14 +68,18 @@ void TC0_Handler() {
             attachInterrupt(digitalPinToInterrupt(pinSD), startRead, FALLING);
 
             stopTimerBaud3();
-
-            dataMaster = dataIn;
-            dataChildOut = dataOut;
-            newData = true;
-
             // Clear port D interrupt status
             (void)REG_PIOD_ISR;
             NVIC_EnableIRQ(PIOD_IRQn);
+
+            constexpr int dataSize = 4;
+            byte data[dataSize] = {
+                (byte)dataIn, (byte)(dataIn >> 8),
+                (byte)dataOut, (byte)(dataOut >> 8)
+            };
+            SerialUSB.write(data, dataSize);
+            //SerialUSB.println(dataIn, HEX);
+            //SerialUSB.print(dataIn, HEX); SerialUSB.print(' '); SerialUSB.println(dataOut, HEX);
         }
     } else {
         if (bitCount >= 16) {
@@ -105,8 +107,8 @@ void startRead() {
 
 void startWrite() {
     if (!digitalRead(pinSC)) {
-        dataOut = dataChildIn;
-        dataChildIn = 0xFFFF;
+        dataOut = dataChild;
+        dataChild = 0xFFFF;
         bitCount = 0;
         writing = true;
         NVIC_DisableIRQ(PIOD_IRQn);
@@ -115,23 +117,10 @@ void startWrite() {
 }
 
 void loop() {
-    if (Serial.available() >= 2) {
-        unsigned int data = Serial.read() & 0xFF;
-        data |= (Serial.read() & 0xFF) << 8;
+    if (SerialUSB.available() >= 2) {
+        unsigned int data = SerialUSB.read() & 0xFF;
+        data |= (SerialUSB.read() & 0xFF) << 8;
 
-        dataChildIn = data;
-    }
-
-    if (newData) {
-        NVIC_DisableIRQ(PIOD_IRQn);
-        newData = false;
-        constexpr int bufferSize = 4;
-        byte buffer[bufferSize] = {
-            (byte)dataMaster, (byte)(dataMaster >> 8),
-            (byte)dataChildOut, (byte)(dataChildOut >> 8)
-        };
-        Serial.write(buffer, bufferSize);
-        //Serial.print(dataMaster, HEX); Serial.print(' '); Serial.println(dataChildOut, HEX);
-        NVIC_EnableIRQ(PIOD_IRQn);
+        dataChild = data;
     }
 }
